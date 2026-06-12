@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tienda-frontend
+  namespace: tienda
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tienda-frontend
+  template:
+    metadata:
+      labels:
+        app: tienda-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: 542768639545.dkr.ecr.us-east-1.amazonaws.com/tienda-frontend:eks-v1 # Colocar uri de tu imagen en ECR
+          ports:
+            - containerPort: 80
+
+          # Se agrega Resource para que Metrics Server calcule el % de CPU y Memoria para escalar 
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+
+          # HEALTH CHECKS
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+

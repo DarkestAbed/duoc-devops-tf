@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Tienda de Alimentos para Perritos &#128054;</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+    }
+    header {
+      background: #3b82f6;
+      color: white;
+      padding: 16px;
+      text-align: center;
+    }
+    main {
+      max-width: 1000px;
+      margin: 20px auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1, h2 {
+      margin-top: 0;
+    }
+    .actions {
+      margin-bottom: 16px;
+    }
+    button {
+      padding: 8px 16px;
+      margin-right: 8px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      background: #3b82f6;
+      color: white;
+    }
+    button.secondary {
+      background: #6b7280;
+    }
+    button.danger {
+      background: #ef4444;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background: #e5e7eb;
+    }
+    tr:nth-child(even) {
+      background: #f9fafb;
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+    label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 6px;
+      border-radius: 4px;
+      border: 1px solid #d1d5db;
+      box-sizing: border-box;
+    }
+    .status {
+      margin-top: 10px;
+      font-size: 0.9rem;
+    }
+    .status.ok {
+      color: #16a34a;
+    }
+    .status.error {
+      color: #dc2626;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Tienda de Alimentos para Perritos &#128054;</h1>
+    <p>Gestión CRUD de productos en contenedores Docker (Frontend + Backend + MySQL)</p>
+  </header>
+  <main>
+    <section>
+      <h2>Productos</h2>
+      <div class="actions">
+        <button id="btnCargar">Cargar Productos</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Nombre</th>
+            <th>Descripción</th>
+            <th>Precio</th>
+            <th>Stock</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="tbodyProductos">
+          <!-- Aqu�� se insertan filas dinamicamente -->
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="formTitle">Nuevo producto</h2>
+      <div class="form-grid">
+        <div>
+          <label for="nombre">Nombre</label>
+          <input type="text" id="nombre" placeholder="Ej: Alimento Premium Cachorro" />
+        </div>
+        <div>
+          <label for="descripcion">Descripción</label>
+          <textarea id="descripcion" rows="2" placeholder="Ej: Sabor pollo, razas pequeñas"></textarea>
+        </div>
+        <div>
+          <label for="precio">Precio</label>
+          <input type="number" id="precio" step="0.01" min="0" placeholder="Ej: 19990" />
+        </div>
+        <div>
+          <label for="stock">Stock</label>
+          <input type="number" id="stock" min="0" placeholder="Ej: 10" />
+        </div>
+      </div>
+      <div class="actions" style="margin-top: 12px;">
+        <button id="btnGuardar">Guardar</button>
+        <button id="btnCancelar" class="secondary">Cancelar</button>
+      </div>
+      <div id="status" class="status"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

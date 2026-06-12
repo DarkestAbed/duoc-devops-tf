@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tienda-db
+  namespace: tienda
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tienda-db
+  template:
+    metadata:
+      labels:
+        app: tienda-db
+    spec:
+      containers:
+        - name: mysql
+          image: 542768639545.dkr.ecr.us-east-1.amazonaws.com/tienda-db:eks-v1 # Colocar uri de tu imagen en ECR
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_ROOT_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: data
+          emptyDir: {}

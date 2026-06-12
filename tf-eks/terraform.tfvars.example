@@ -1,0 +1,35 @@
+# ==============================================================================
+# TERRAFORM VARIABLES EXAMPLE
+# Copy this file to terraform.tfvars and fill in the values.
+#   cp terraform.tfvars.example terraform.tfvars
+# ==============================================================================
+
+region             = "us-east-1"
+cluster_name       = "tienda-eks"
+cluster_version    = "1.30"
+
+# VPC: leave empty to auto-discover by tag (Name = "academy-vpc"),
+# or set to the VPC ID if you created it manually or it has a different name.
+# Example: vpc_id = "vpc-0123456789abcdef0"
+vpc_id = ""
+
+# Pre-existing IAM role in AWS Academy. 'LabRole' is the default role provided
+# by AWS Academy that trusts both eks.amazonaws.com and ec2.amazonaws.com.
+# AWS Academy students cannot create IAM roles, so we use the existing LabRole.
+cluster_role_name  = "LabRole"
+node_role_name     = "LabRole"
+
+# Node group configuration (SPOT instances for cost optimization)
+node_instance_type = "t3.large"
+node_desired_size  = 1
+node_min_size      = 1
+node_max_size      = 3
+
+# ECR repositories for the Tienda application
+ecr_repo_names = ["tienda-frontend", "tienda-backend", "tienda-db"]
+
+# Optional: add custom tags
+# common_tags = {
+#   Environment = "lab"
+#   Course       = "ISY1101"
+# }

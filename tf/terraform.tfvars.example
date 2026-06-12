@@ -1,0 +1,29 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# DO NOT commit terraform.tfvars to Git if it contains secrets.
+
+region        = "us-east-1"
+vpc_cidr      = "10.0.0.0/20"
+azs           = ["us-east-1a", "us-east-1b"]
+instance_type = "t3.micro"
+
+# ------------------------------------------------------------------------------
+# CRITICAL: You MUST create or import an EC2 Key Pair in the AWS console
+# before running Terraform. SSH will fail without this.
+# ------------------------------------------------------------------------------
+key_name = "labsuser"
+
+# Optional: provide a custom AMI instead of using the latest Amazon Linux 2023
+# ami_id = "ami-xxxxxxxxxxxxxxxxx"
+
+# Optional: restrict web access to your own IP instead of 0.0.0.0/0
+# allowed_web_cidr = "203.0.113.10/32"
+
+# Optional: bootstrap instances with user data (Docker + Git)
+# user_data_web = <<-EOF
+#   #!/bin/bash
+#   yum update -y
+#   yum install -y docker git
+#   systemctl enable docker
+#   systemctl start docker
+#   usermod -aG docker ec2-user
+# EOF
