@@ -19,7 +19,7 @@ resource "aws_subnet" "public" {
   availability_zone       = local.azs[count.index]
   map_public_ip_on_launch = var.map_public_ip_on_launch
 
-  tags = merge(var.tags, {
+  tags = merge(var.tags, var.subnet_tags, var.public_subnet_tags, {
     Name = "public-subnet-${count.index + 1}"
   })
 }
@@ -30,7 +30,7 @@ resource "aws_subnet" "private_app" {
   cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, var.public_subnet_newbits, count.index + var.private_app_subnet_offset)
   availability_zone = local.azs[count.index]
 
-  tags = merge(var.tags, {
+  tags = merge(var.tags, var.subnet_tags, var.private_subnet_tags, {
     Name = "private-app-subnet-${count.index + 1}"
   })
 }
@@ -41,7 +41,7 @@ resource "aws_subnet" "private_data" {
   cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, var.public_subnet_newbits, count.index + var.private_data_subnet_offset)
   availability_zone = local.azs[count.index]
 
-  tags = merge(var.tags, {
+  tags = merge(var.tags, var.subnet_tags, var.private_subnet_tags, {
     Name = "private-data-subnet-${count.index + 1}"
   })
 }
@@ -111,19 +111,4 @@ resource "aws_route_table_association" "data_assoc" {
   count          = length(local.azs)
   subnet_id      = aws_subnet.private_data[count.index].id
   route_table_id = aws_route_table.private_rt.id
-}
-
-resource "aws_vpc_endpoint" "s3" {
-  vpc_id            = aws_vpc.main.id
-  vpc_endpoint_type = "Gateway"
-  service_name      = "com.amazonaws.us-east-1.s3"
-
-  route_table_ids = [
-    aws_route_table.public_rt.id,
-    aws_route_table.private_rt.id
-  ]
-
-  tags = merge(var.tags, {
-    Name = "s3-gateway-endpoint"
-  })
 }

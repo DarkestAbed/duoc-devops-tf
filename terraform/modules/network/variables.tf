@@ -52,10 +52,22 @@ variable "enable_dns_hostnames" {
   default     = true
 }
 
-variable "enable_s3_endpoint" {
-  description = "Create an S3 Gateway VPC endpoint"
-  type        = bool
-  default     = true
+variable "subnet_tags" {
+  description = "Common tags merged into every subnet (e.g. kubernetes.io/cluster/* from the root module)."
+  type        = map(string)
+  default     = {}
+}
+
+variable "public_subnet_tags" {
+  description = "Additional tags merged only into public subnets (e.g. kubernetes.io/role/elb for the LBC)."
+  type        = map(string)
+  default     = {}
+}
+
+variable "private_subnet_tags" {
+  description = "Additional tags merged only into private subnets (e.g. kubernetes.io/role/internal-elb for the LBC)."
+  type        = map(string)
+  default     = {}
 }
 
 variable "tags" {

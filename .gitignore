@@ -1,0 +1,5 @@
+# folders
+docs/
+# files
+terraform.tfvars
+terraform.tfstate
