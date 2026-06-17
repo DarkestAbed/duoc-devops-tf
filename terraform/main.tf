@@ -1,118 +1,62 @@
 # ==============================================================================
 # ROOT MODULE
-# Orchestrates security groups, EKS cluster, and ECR repositories.
-# Discovers the existing VPC created by the tf/ infrastructure module.
+# Orchestrates network (VPC/subnets/route tables), security groups, EKS cluster,
+# and ECR repositories. The network is created in this repo by the network module
+# — there is no reliance on a pre-existing VPC or a separate state.
 # ==============================================================================
 
 # ==============================================================================
-# VPC DATA SOURCE
-# If vpc_id is provided, use it directly. Otherwise, discover by tag.
+# NETWORK MODULE
+# Creates the VPC (academy-vpc), public/private-app/private-data subnets,
+# Internet Gateway, NAT Gateway, and route tables.
+# Kubernetes subnet tags are passed in here so LoadBalancer Services work
+# without needing separate aws_ec2_tag resources.
 # ==============================================================================
 
-data "aws_vpc" "selected" {
-  count = var.vpc_id != "" ? 1 : 0
-  id    = var.vpc_id
-}
+module "network" {
+  source = "./modules/network"
 
-data "aws_vpc" "academy" {
-  count = var.vpc_id == "" ? 1 : 0
-  filter {
-    name   = "tag:Name"
-    values = ["academy-vpc"]
+  vpc_cidr = var.vpc_cidr
+  azs      = var.azs
+  tags     = var.common_tags
+
+  # Mark every subnet as shared by this cluster.
+  subnet_tags = {
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+  }
+
+  # Public subnets host external LoadBalancers.
+  public_subnet_tags = {
+    "kubernetes.io/role/elb" = "1"
+  }
+
+  # Private subnets host internal LoadBalancers.
+  private_subnet_tags = {
+    "kubernetes.io/role/internal-elb" = "1"
   }
 }
-
-locals {
-  vpc_id   = var.vpc_id != "" ? data.aws_vpc.selected[0].id : data.aws_vpc.academy[0].id
-  vpc_cidr = var.vpc_id != "" ? data.aws_vpc.selected[0].cidr_block : data.aws_vpc.academy[0].cidr_block
-}
-
-# ==============================================================================
-# SUBNET DATA SOURCES
-# Discover subnets by VPC ID and Name tags.
-# ==============================================================================
-
-data "aws_subnets" "public" {
-  filter {
-    name   = "vpc-id"
-    values = [local.vpc_id]
-  }
-  filter {
-    name   = "tag:Name"
-    values = ["public-subnet-*"]
-  }
-}
-
-data "aws_subnets" "private_app" {
-  filter {
-    name   = "vpc-id"
-    values = [local.vpc_id]
-  }
-  filter {
-    name   = "tag:Name"
-    values = ["private-app-subnet-*"]
-  }
-}
-
-data "aws_subnets" "private_data" {
-  filter {
-    name   = "vpc-id"
-    values = [local.vpc_id]
-  }
-  filter {
-    name   = "tag:Name"
-    values = ["private-data-subnet-*"]
-  }
-}
-
-data "aws_caller_identity" "current" {}
 
 # ==============================================================================
 # LOCALS
+# Convenience aggregations of subnet IDs from the network module.
 # ==============================================================================
 
 locals {
+  vpc_id   = module.network.vpc_id
+  vpc_cidr = module.network.vpc_cidr
+
   all_subnet_ids = concat(
-    data.aws_subnets.public.ids,
-    data.aws_subnets.private_app.ids,
-    data.aws_subnets.private_data.ids
+    module.network.public_subnet_ids,
+    module.network.private_app_subnet_ids,
+    module.network.private_data_subnet_ids
   )
   private_subnet_ids = concat(
-    data.aws_subnets.private_app.ids,
-    data.aws_subnets.private_data.ids
+    module.network.private_app_subnet_ids,
+    module.network.private_data_subnet_ids
   )
 }
 
-# ==============================================================================
-# SUBNET TAGGING FOR KUBERNETES
-# CRITICAL: Without these tags, Service type LoadBalancer stays Pending forever.
-# Uses aws_ec2_tag to add tags to subnets managed by the tf/ state without
-# claiming ownership of those resources.
-# ==============================================================================
-
-# All subnets: mark as shared cluster subnets
-resource "aws_ec2_tag" "cluster_tag" {
-  for_each    = toset(local.all_subnet_ids)
-  resource_id = each.value
-  key         = "kubernetes.io/cluster/${var.cluster_name}"
-  value       = "shared"
-}
-
-# Public subnets: mark for external LoadBalancer provisioning
-resource "aws_ec2_tag" "public_elb_tag" {
-  for_each    = toset(data.aws_subnets.public.ids)
-  resource_id = each.value
-  key         = "kubernetes.io/role/elb"
-  value       = "1"
-}
-
-# Private subnets: mark for internal LoadBalancer provisioning
-resource "aws_ec2_tag" "internal_elb_tag" {
-  for_each    = toset(local.private_subnet_ids)
-  resource_id = each.value
-  key         = "kubernetes.io/role/internal-elb"
-  value       = "1"
-}
+data "aws_caller_identity" "current" {}
 
 # ==============================================================================
 # MODULES
@@ -141,11 +85,8 @@ module "eks" {
   node_max_size      = var.node_max_size
   tags               = var.common_tags
 
-  depends_on = [
-    aws_ec2_tag.cluster_tag,
-    aws_ec2_tag.public_elb_tag,
-    aws_ec2_tag.internal_elb_tag,
-  ]
+  # Subnets (with their kubernetes.io tags) must exist before the cluster.
+  depends_on = [module.network]
 }
 
 module "ecr" {

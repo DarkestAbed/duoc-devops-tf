@@ -8,10 +8,16 @@ variable "region" {
   default     = "us-east-1"
 }
 
-variable "vpc_id" {
-  description = "VPC ID to deploy into. Leave empty to auto-discover by tag (Name = 'academy-vpc'). Set this if the VPC was created manually or has a different name."
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC created by the network module"
   type        = string
-  default     = ""
+  default     = "10.0.0.0/20"
+}
+
+variable "azs" {
+  description = "Availability Zones to spread subnets across. Must be at least 2 for EKS."
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b"]
 }
 
 variable "cluster_name" {

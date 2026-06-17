@@ -38,6 +38,15 @@ output "vpc_id" {
   value       = local.vpc_id
 }
 
+output "subnet_ids" {
+  description = "Map of subnet group IDs created by the network module"
+  value = {
+    public       = module.network.public_subnet_ids
+    private_app  = module.network.private_app_subnet_ids
+    private_data = module.network.private_data_subnet_ids
+  }
+}
+
 output "node_group_name" {
   description = "Name of the EKS node group"
   value       = module.eks.node_group_name
