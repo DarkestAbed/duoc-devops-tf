@@ -39,7 +39,7 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          cd frontend
+          cd app-k8s/frontend
           docker build -t $ECR_REGISTRY/${ECR_REPO_FRONTEND}:${IMAGE_TAG} .
           docker push $ECR_REGISTRY/${ECR_REPO_FRONTEND}:${IMAGE_TAG}
 
@@ -48,7 +48,7 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          cd backend
+          cd app-k8s/backend
           docker build -t $ECR_REGISTRY/${ECR_REPO_BACKEND}:${IMAGE_TAG} .
           docker push $ECR_REGISTRY/${ECR_REPO_BACKEND}:${IMAGE_TAG}
 
@@ -57,7 +57,7 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          cd db
+          cd app-k8s/db
           docker build -t $ECR_REGISTRY/${ECR_REPO_DB}:${IMAGE_TAG} .
           docker push $ECR_REGISTRY/${ECR_REPO_DB}:${IMAGE_TAG}
 
@@ -83,10 +83,10 @@ jobs:
         env:
           EKS_NAMESPACE: ${{ secrets.EKS_NAMESPACE }}
         run: |
-          kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/mysql-secret.yaml -n $EKS_NAMESPACE
-          kubectl apply -f k8s/mysql-deployment.yaml -n $EKS_NAMESPACE
-          kubectl apply -f k8s/mysql-service.yaml -n $EKS_NAMESPACE
+          kubectl apply -f app-k8s/k8s/namespace.yaml
+          kubectl apply -f app-k8s/k8s/mysql-secret.yaml -n $EKS_NAMESPACE
+          kubectl apply -f app-k8s/k8s/mysql-deployment.yaml -n $EKS_NAMESPACE
+          kubectl apply -f app-k8s/k8s/mysql-service.yaml -n $EKS_NAMESPACE
 
       # ---------- Actualizar BACKEND en EKS ----------
       - name: Actualizar BACKEND en EKS
@@ -94,8 +94,8 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           EKS_NAMESPACE: ${{ secrets.EKS_NAMESPACE }}
         run: |
-          kubectl apply -f k8s/backend-deployment.yaml -n $EKS_NAMESPACE
-          kubectl apply -f k8s/backend-service.yaml -n $EKS_NAMESPACE
+          kubectl apply -f app-k8s/k8s/backend-deployment.yaml -n $EKS_NAMESPACE
+          kubectl apply -f app-k8s/k8s/backend-service.yaml -n $EKS_NAMESPACE
           kubectl set image deployment/tienda-backend \
             backend=$ECR_REGISTRY/${ECR_REPO_BACKEND}:${IMAGE_TAG} \
             -n $EKS_NAMESPACE
@@ -107,8 +107,8 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           EKS_NAMESPACE: ${{ secrets.EKS_NAMESPACE }}
         run: |
-          kubectl apply -f k8s/frontend-deployment.yaml -n $EKS_NAMESPACE
-          kubectl apply -f k8s/frontend-service.yaml -n $EKS_NAMESPACE
+          kubectl apply -f app-k8s/k8s/frontend-deployment.yaml -n $EKS_NAMESPACE
+          kubectl apply -f app-k8s/k8s/frontend-service.yaml -n $EKS_NAMESPACE
           kubectl set image deployment/tienda-frontend \
             frontend=$ECR_REGISTRY/${ECR_REPO_FRONTEND}:${IMAGE_TAG} \
             -n $EKS_NAMESPACE
@@ -119,8 +119,8 @@ jobs:
         env:
           EKS_NAMESPACE: ${{ secrets.EKS_NAMESPACE }}
         run: |
-          if [ -f k8s/backend-hpa.yaml ]; then kubectl apply -f k8s/backend-hpa.yaml -n $EKS_NAMESPACE; fi
-          if [ -f k8s/frontend-hpa.yaml ]; then kubectl apply -f k8s/frontend-hpa.yaml -n $EKS_NAMESPACE; fi
+          if [ -f app-k8s/k8s/backend-hpa.yaml ]; then kubectl apply -f app-k8s/k8s/backend-hpa.yaml -n $EKS_NAMESPACE; fi
+          if [ -f app-k8s/k8s/frontend-hpa.yaml ]; then kubectl apply -f app-k8s/k8s/frontend-hpa.yaml -n $EKS_NAMESPACE; fi
 
       # ---------- Ver estado final ----------
       - name: Ver pods y servicios
