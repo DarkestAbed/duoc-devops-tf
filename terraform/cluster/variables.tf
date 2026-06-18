@@ -1,5 +1,7 @@
 # ==============================================================================
-# GLOBAL VARIABLES
+# cluster/ ROOT VARIABLES
+# Inputs that control the AWS infrastructure only. The LBC credentials and
+# other Kubernetes-side inputs live in the addons/ root.
 # ==============================================================================
 
 variable "region" {
@@ -62,32 +64,6 @@ variable "enable_dns_hostnames" {
   description = "Enable DNS hostnames in the VPC"
   type        = bool
   default     = true
-}
-
-# --- AWS credentials for the AWS Load Balancer Controller ---
-# Leave at null to read them from the shell environment (export_vars.sh) via
-# the `external` data source in main.tf. Set explicitly in terraform.tfvars to
-# override.
-
-variable "aws_access_key_id" {
-  description = "AWS access key for the LBC pod. null = read from env (AWS_ACCESS_KEY_ID)."
-  type        = string
-  sensitive   = true
-  default     = null
-}
-
-variable "aws_secret_access_key" {
-  description = "AWS secret key for the LBC pod. null = read from env (AWS_SECRET_ACCESS_KEY)."
-  type        = string
-  sensitive   = true
-  default     = null
-}
-
-variable "aws_session_token" {
-  description = "AWS session token for the LBC pod. null = read from env (AWS_SESSION_TOKEN)."
-  type        = string
-  sensitive   = true
-  default     = null
 }
 
 variable "cluster_name" {

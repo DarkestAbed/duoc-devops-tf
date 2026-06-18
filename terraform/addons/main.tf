@@ -1,19 +1,20 @@
 # ==============================================================================
-# ROOT MODULE
-# Provisions the VPC, security groups, EKS cluster, ECR repositories, and the
-# AWS Load Balancer Controller Helm release — all in one self-contained root.
+# addons/ ROOT MODULE
+# Installs Kubernetes add-ons (the AWS Load Balancer Controller Helm release
+# and its aws-credentials Secret) on top of a cluster created by the sibling
+# cluster/ root. Reads the cluster endpoint, CA data, and VPC ID from
+# `terraform_remote_state` — the cluster/ root must have been applied at
+# least once before this root can plan.
 # ==============================================================================
-
-data "aws_caller_identity" "current" {}
 
 # ==============================================================================
 # READ AWS CREDENTIALS FROM THE SHELL ENVIRONMENT
 #
-# Terraform has no built-in `env()` function. The lab's existing
-# export_vars.sh exports AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
-# AWS_SESSION_TOKEN (the names the AWS CLI and SDKs use), not TF_VAR_* mirrors.
-# To avoid asking the student to export the values twice, we read the env via
-# the `external` data source: a tiny `jq` invocation prints the three vars.
+# The lab's `export_vars.sh` exports AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# / AWS_SESSION_TOKEN (the names the AWS CLI and SDKs use), not TF_VAR_*
+# mirrors. To avoid asking the student to export the values twice, we read
+# the env via the `external` data source: a tiny `jq` invocation prints the
+# three vars.
 #
 # Only evaluated when its result is read (in the locals block below).
 # ==============================================================================
@@ -26,46 +27,15 @@ data "external" "aws_env" {
 
 # ==============================================================================
 # LOCALS
-# Subnet tagging required by the AWS Load Balancer Controller to discover
-# which subnets to place ALBs/NLBs in. The cluster tag is merged into every
-# subnet via `subnet_tags`; the ELB role tags are applied per subnet type
-# through `public_subnet_tags` and `private_subnet_tags`.
+# AWS credentials for the LBC pod. Resolution order:
+#   1. var.aws_access_key_id (explicit tfvars or -var flag)
+#   2. data.external.aws_env (reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+#      / AWS_SESSION_TOKEN from the shell environment — the names the
+#      student's export_vars.sh script already exports)
+#   3. empty string (caught by the check block below)
 # ==============================================================================
 
 locals {
-  cluster_tag = "kubernetes.io/cluster/${var.cluster_name}"
-
-  subnet_tags = merge(
-    var.common_tags,
-    {
-      (local.cluster_tag) = "shared"
-    }
-  )
-
-  public_subnet_tags = {
-    "kubernetes.io/role/elb" = "1"
-  }
-
-  private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = "1"
-  }
-
-  all_subnet_ids = concat(
-    module.network.public_subnet_ids,
-    module.network.private_app_subnet_ids,
-    module.network.private_data_subnet_ids,
-  )
-
-  # Kept for outputs.tf (vpc_id / subnet_ids) and the security_groups module.
-  vpc_id   = module.network.vpc_id
-  vpc_cidr = module.network.vpc_cidr
-
-  # AWS credentials for the LBC pod. Resolution order:
-  #   1. var.aws_access_key_id (explicit tfvars or -var flag)
-  #   2. data.external.aws_env (reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-  #      / AWS_SESSION_TOKEN from the shell environment — the names the
-  #      student's export_vars.sh script already exports)
-  #   3. empty string (caught by the check block below)
   aws_access_key_id     = sensitive(var.aws_access_key_id != null ? var.aws_access_key_id : try(data.external.aws_env[0].result.key_id, ""))
   aws_secret_access_key = sensitive(var.aws_secret_access_key != null ? var.aws_secret_access_key : try(data.external.aws_env[0].result.access_key, ""))
   aws_session_token     = sensitive(var.aws_session_token != null ? var.aws_session_token : try(data.external.aws_env[0].result.session_token, ""))
@@ -81,67 +51,8 @@ locals {
 check "aws_credentials_present" {
   assert {
     condition     = local.aws_access_key_id != "" && local.aws_secret_access_key != "" && local.aws_session_token != ""
-    error_message = "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN must be set in the apply environment. Run 'source export_vars.sh' (or paste the AWS Academy creds manually) and re-run terraform plan/apply. These three env vars are mounted into the LBC pod as AWS credentials via a Kubernetes Secret."
+    error_message = "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN must be set in the apply environment. Run 'source terraform/export_vars.sh' (or paste the AWS Academy creds manually) and re-run terraform plan/apply. These three env vars are mounted into the LBC pod as AWS credentials via a Kubernetes Secret."
   }
-}
-
-# ==============================================================================
-# MODULES
-# ==============================================================================
-
-module "network" {
-  source = "./modules/network"
-
-  vpc_cidr                   = var.vpc_cidr
-  azs                        = var.azs
-  public_subnet_newbits      = var.public_subnet_newbits
-  public_subnet_offset       = var.public_subnet_offset
-  private_app_subnet_offset  = var.private_app_subnet_offset
-  private_data_subnet_offset = var.private_data_subnet_offset
-  map_public_ip_on_launch    = var.map_public_ip_on_launch
-  enable_dns_support         = var.enable_dns_support
-  enable_dns_hostnames       = var.enable_dns_hostnames
-  subnet_tags                = local.subnet_tags
-  public_subnet_tags         = local.public_subnet_tags
-  private_subnet_tags        = local.private_subnet_tags
-  tags                       = var.common_tags
-}
-
-module "security_groups" {
-  source = "./modules/security_groups"
-
-  vpc_id   = local.vpc_id
-  vpc_cidr = local.vpc_cidr
-  tags     = var.common_tags
-}
-
-module "eks" {
-  source = "./modules/eks"
-
-  cluster_name       = var.cluster_name
-  cluster_version    = var.cluster_version
-  cluster_role_name  = var.cluster_role_name
-  node_role_name     = var.node_role_name
-  subnet_ids         = local.all_subnet_ids
-  node_subnet_ids    = local.all_subnet_ids
-  cluster_sg_ids     = [module.security_groups.sg_cluster_id, module.security_groups.sg_nodes_id]
-  node_instance_type = var.node_instance_type
-  node_desired_size  = var.node_desired_size
-  node_min_size      = var.node_min_size
-  node_max_size      = var.node_max_size
-  tags               = var.common_tags
-
-  depends_on = [
-    module.network,
-    module.security_groups,
-  ]
-}
-
-module "ecr" {
-  source = "./modules/ecr"
-
-  repository_names = var.ecr_repo_names
-  tags             = var.common_tags
 }
 
 # ==============================================================================
@@ -184,7 +95,7 @@ resource "kubernetes_secret" "aws_credentials" {
 
   type = "Opaque"
 
-  depends_on = [module.eks]
+  depends_on = [data.terraform_remote_state.cluster]
 }
 
 # ==============================================================================
@@ -208,7 +119,7 @@ resource "helm_release" "aws_load_balancer_controller" {
 
   set {
     name  = "clusterName"
-    value = var.cluster_name
+    value = data.terraform_remote_state.cluster.outputs.cluster_name
   }
   set {
     name  = "region"
@@ -216,7 +127,7 @@ resource "helm_release" "aws_load_balancer_controller" {
   }
   set {
     name  = "vpcId"
-    value = local.vpc_id
+    value = data.terraform_remote_state.cluster.outputs.vpc_id
   }
   set {
     name  = "serviceAccount.create"
@@ -257,7 +168,7 @@ resource "helm_release" "aws_load_balancer_controller" {
   }
 
   depends_on = [
-    module.eks,
+    data.terraform_remote_state.cluster,
     kubernetes_secret.aws_credentials,
   ]
 }

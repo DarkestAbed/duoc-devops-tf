@@ -1,0 +1,24 @@
+# ==============================================================================
+# addons/ ROOT — TERRAFORM VARIABLES EXAMPLE
+# Copy this file to terraform.tfvars and fill in the values.
+#   cp terraform.tfvars.example terraform.tfvars
+# ==============================================================================
+
+# These two must match the values used by the sibling cluster/ root.
+region       = "us-east-1"
+cluster_name = "tienda-eks"
+
+# AWS credentials for the LBC pod. Leave all three null (the default) to
+# have Terraform read them from the shell environment — the typical workflow
+# is `source terraform/export_vars.sh` in the same shell that runs
+# `terraform apply`.
+#
+# aws_access_key_id     = "ASIA..."
+# aws_secret_access_key = "..."
+# aws_session_token     = "..."
+
+# Optional: tags forwarded as Kubernetes Secret labels.
+# common_tags = {
+#   Environment = "lab"
+#   Course      = "ISY1101"
+# }

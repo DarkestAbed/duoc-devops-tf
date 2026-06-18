@@ -1,0 +1,48 @@
+# ==============================================================================
+# cluster/ ROOT — TERRAFORM VARIABLES EXAMPLE
+# Copy this file to terraform.tfvars and fill in the values.
+#   cp terraform.tfvars.example terraform.tfvars
+# ==============================================================================
+
+region          = "us-east-1"
+cluster_name    = "tienda-eks"
+cluster_version = "1.36"
+
+# Network: the VPC and subnets are created in this repo by the network module.
+vpc_cidr = "10.0.0.0/20"
+azs      = ["us-east-1a", "us-east-1b"]
+
+# --- Discover the IAM role names in YOUR account -----------------------
+# AWS Academy creates these roles per-lab, with an account-specific prefix
+# and a random suffix. NEVER copy these values from a classmate's repo or
+# the README — discover them in your account with:
+#
+#   aws iam list-roles \
+#     --query 'Roles[?starts_with(RoleName, `LabEksClusterRole-`)].RoleName' \
+#     --output text
+#
+#   aws iam list-roles \
+#     --query 'Roles[?starts_with(RoleName, `LabEksNodeRole-`)].RoleName' \
+#     --output text
+#
+# Paste the two role names below. If neither prefix matches, your lab
+# session hasn't provisioned them yet — start the lab in Vocareum and
+# wait for the dot to go green.
+# -----------------------------------------------------------------------
+cluster_role_name = "REPLACE_WITH_LabEksClusterRole_FROM_LIST_ROLES"
+node_role_name    = "REPLACE_WITH_LabEksNodeRole_FROM_LIST_ROLES"
+
+# Node group configuration (SPOT instances for cost optimization)
+node_instance_type = "t3.large"
+node_desired_size  = 1
+node_min_size      = 1
+node_max_size      = 3
+
+# ECR repositories for the Tienda application
+ecr_repo_names = ["tienda-frontend", "tienda-backend", "tienda-db"]
+
+# Optional: add custom tags
+# common_tags = {
+#   Environment = "lab"
+#   Course      = "ISY1101"
+# }
