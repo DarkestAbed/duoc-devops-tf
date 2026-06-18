@@ -9,7 +9,7 @@
 - [1. Introducción al proyecto](#1-introducción-al-proyecto)
 - [2. Arquitectura general](#2-arquitectura-general)
 - [3. Componentes del repositorio](#3-componentes-del-repositorio)
-  - [3.1. `tf-eks/` — Infraestructura con Terraform](#31-tf-eks--infraestructura-con-terraform)
+  - [3.1. `terraform/` — Infraestructura con Terraform (cluster/ y addons/)](#31-terraform--infraestructura-con-terraform-cluster-y-addons)
   - [3.2. `app-k8s/` — Aplicación contenerizada y manifiestos Kubernetes](#32-app-k8s--aplicación-contenerizada-y-manifiestos-kubernetes)
 - [4. Instrucciones de uso](#4-instrucciones-de-uso)
   - [4.1. Prerrequisitos](#41-prerrequisitos)
@@ -23,7 +23,7 @@
   - [5.2. Roles IAM preexistentes](#52-roles-iam-preexistentes)
   - [5.3. Variables de Terraform](#53-variables-de-terraform)
 - [6. Validación de componentes](#6-validación-de-componentes)
-  - [6.1. Chequeo previo con `preflight.sh`](#61-chequeo-previo-con-preflightsh)
+  - [6.1. Descubrir los nombres de los roles IAM](#61-descubrir-los-nombres-de-los-roles-iam)
   - [6.2. Validación del clúster EKS](#62-validación-del-clúster-eks)
   - [6.3. Validación del AWS Load Balancer Controller](#63-validación-del-aws-load-balancer-controller)
   - [6.4. Validación de los pods y servicios de la aplicación](#64-validación-de-los-pods-y-servicios-de-la-aplicación)
@@ -141,27 +141,41 @@ El despliegue de la aplicación en Kubernetes se realiza con manifiestos YAML es
 
 ## 3. Componentes del repositorio
 
-### 3.1. `tf-eks/` — Infraestructura con Terraform
+### 3.1. `terraform/` — Infraestructura con Terraform (cluster/ y addons/)
 
-Este directorio contiene **toda la infraestructura como código** necesaria para provisionar el clúster EKS y sus dependencias. Es completamente autocontenido: no requiere que se aplique ningún otro módulo Terraform previamente.
+Este directorio contiene **toda la infraestructura como código** necesaria para provisionar el clúster EKS y sus dependencias, dividida en **dos módulos raíz** que se aplican en orden:
+
+- **`terraform/cluster/`** — Aprovisiona el VPC, los security groups, el clúster EKS, el node group y los repositorios ECR. **No tiene providers de kubernetes/helm**, así que un `terraform plan` en greenfield no falla por la falta del clúster.
+- **`terraform/addons/`** — Instala el Helm release del AWS Load Balancer Controller y su Secret `aws-credentials` en `kube-system`. Lee los outputs de `cluster/` (endpoint, CA, VPC ID) vía `terraform_remote_state`. **`cluster/` debe haberse aplicado al menos una vez antes de que `addons/` pueda hacer `plan`.**
 
 #### Estructura interna
 
 ```
-tf-eks/
-├── main.tf                  # Orquestación de módulos y recursos raíz
-├── variables.tf             # Variables de entrada del módulo raíz
-├── outputs.tf               # Outputs del módulo raíz
-├── versions.tf              # Configuración de providers (aws, kubernetes, helm, external)
-├── terraform.tfvars.example # Plantilla de valores (copiar a terraform.tfvars)
-├── 00-export_vars.sh        # Script para exportar credenciales AWS Academy
-├── preflight.sh             # Chequeo previo al apply (valida sesión y roles IAM)
-├── .gitignore               # Exclusiones de git
-├── modules/
-│   ├── network/             # VPC, subnets, IGW, NAT GW, route tables
-│   ├── security_groups/     # SG del clúster y de los nodos worker
-│   ├── eks/                 # Clúster EKS, node group, add-ons, log group
-└   └── ecr/                 # Repositorios ECR para las imágenes Docker
+terraform/
+├── cluster/                   # Root 1: AWS-only (VPC, SGs, EKS, ECR)
+│   ├── versions.tf            # Solo provider `aws` (+ external)
+│   ├── variables.tf           # region, vpc_*, cluster_*, node_*, ecr_repo_names, common_tags
+│   ├── main.tf                # Orquestación de los 4 módulos + check de credenciales
+│   ├── outputs.tf             # cluster_name, cluster_endpoint, cluster_ca_data, vpc_id, ecr_*
+│   ├── terraform.tfvars.example
+│   ├── .gitignore
+│   └── (terraform.tfvars)     # Crear a partir del .example con los roles descubiertos
+├── addons/                    # Root 2: kubernetes/helm (LBC, Secret)
+│   ├── versions.tf            # providers aws + kubernetes + helm + external
+│   ├── variables.tf           # region, cluster_name, common_tags + aws_*_credential
+│   ├── main.tf                # data.terraform_remote_state.cluster + kubernetes_secret + helm_release
+│   ├── outputs.tf             # kubeconfig_command, lbc_release_name
+│   ├── terraform.tfvars.example
+│   ├── .gitignore
+│   └── (terraform.tfvars)     # Crear a partir del .example
+├── modules/                   # Módulos compartidos por ambos roots
+│   ├── network/               # VPC, subnets, IGW, NAT GW, route tables
+│   ├── security_groups/       # SG del clúster y de los nodos worker
+│   ├── eks/                   # Clúster EKS, node group, add-ons, log group
+│   └── ecr/                   # Repositorios ECR para las imágenes Docker
+├── export_vars.sh             # Script para exportar credenciales AWS Academy
+├── docs/                      # README, RUNBOOK, TROUBLESHOOTING (en/es)
+└── README.md                  # README del subdirectorio terraform
 ```
 
 #### Módulos de Terraform
@@ -173,13 +187,21 @@ tf-eks/
 | `eks` | Log group de CloudWatch, clúster EKS, node group (SPOT t3.large, 1-3 nodos), 3 add-ons (vpc-cni, cloudwatch-observability, metrics-server) | `main.tf`, `variables.tf`, `outputs.tf` |
 | `ecr` | 3 repositorios ECR mutables con scan-on-push habilitado | `main.tf`, `variables.tf`, `outputs.tf` |
 
-#### Recursos creados en la raíz (`main.tf`)
+#### ¿Por qué dos roots?
 
-Además de los módulos, el módulo raíz crea directamente:
+El root `addons/` necesita los providers `kubernetes` y `helm` configurados con el endpoint y el CA del clúster. Si ambos roots vivieran en un único módulo, esos providers forzarían una lectura de `data.aws_eks_cluster` durante el plan, antes de que el clúster exista — y eso falla en un apply greenfield con `Error: reading EKS Cluster (tienda-eks): couldn't find resource`. Dividir en dos roots hace que cada uno planifique de forma independiente.
+
+#### Recursos creados en cada root
+
+**`terraform/cluster/main.tf`** crea:
 
 - **`data "aws_caller_identity" "current"`** — Obtiene el ID de cuenta para el comando de login a ECR.
 - **`data "external" "aws_env"`** — Lee las credenciales AWS del entorno shell cuando las variables de Terraform son `null`.
 - **`check "aws_credentials_present"`** — Validación pre-plan que falla si las credenciales AWS no están configuradas.
+
+**`terraform/addons/main.tf`** crea:
+
+- **`data "terraform_remote_state" "cluster"`** — Lee los outputs de `cluster/` (`cluster_endpoint`, `cluster_ca_data`, `vpc_id`) para configurar los providers de kubernetes/helm.
 - **`kubernetes_secret "aws_credentials"`** — Secret `aws-credentials` en `kube-system` con las credenciales STS del estudiante.
 - **`helm_release "aws_load_balancer_controller"`** — Instalación del AWS LBC vía Helm con autenticación vía Secret (sin IRSA).
 
@@ -230,7 +252,7 @@ Antes de comenzar, asegúrate de tener instaladas las siguientes herramientas:
 | **AWS CLI v2** | Cualquiera reciente | Interacción con APIs de AWS, login a ECR |
 | **kubectl** | Compatible con EKS 1.30+ | Gestión del clúster Kubernetes |
 | **Docker** | Cualquiera reciente | Construcción de imágenes de contenedor |
-| **jq** | Cualquiera reciente | Procesamiento de JSON (usado por `preflight.sh`) |
+| **jq** | Cualquiera reciente | Procesamiento de JSON (usado por los data sources `external` en `cluster/` y `addons/`) |
 | **Helm** | 3.x | Gestión del chart del LBC (instalado por Terraform) |
 
 Además, necesitas:
@@ -240,71 +262,64 @@ Además, necesitas:
 
 ### 4.2. Provisionar la infraestructura (Terraform)
 
+Los dos roots se aplican en orden: **`terraform/cluster/` primero**, luego **`terraform/addons/`**. Cada `cd` importa — `terraform_remote_state` en `addons/` lee `../cluster/terraform.tfstate` y sólo resuelve cuando ejecutas desde dentro de `terraform/addons/`.
+
 #### Paso 1: Configurar credenciales de AWS Academy
 
 En Vocareum, haz clic en **AWS Details** → **AWS CLI** → **Show** y copia los tres valores de llaves secretasl. Luego ejecuta:
 
 ```bash
-cd tf-eks
+# Editar el script de exportación con los valores de tu sesión actual
+$EDITOR terraform/export_vars.sh
+# O pegar los valores directamente a mano
 
-# Opción A: Editar el script de exportación
-# Pega los valores en 00-export_vars.sh y luego:
-source 00-export_vars.sh
-
-# Opción B: Exportar manualmente
+# Cargar las credenciales en el shell (mismo shell que ejecutará terraform)
+source terraform/export_vars.sh
+# O exportarlas manualmente:
 export AWS_ACCESS_KEY_ID="ASIAR..."
 export AWS_SECRET_ACCESS_KEY="U64p..."
 export AWS_SESSION_TOKEN="IQoJb3JpZ2lu..."
 ```
 
-> ⚠️ **Importante:** Las credenciales de AWS Academy expiran cada ~3 horas. Cuando expiren, necesitarás re-exportarlas y volver a ejecutar `terraform apply` para refrescar el Secret de Kubernetes.
+> ⚠️ **Importante:** Las credenciales de AWS Academy expiran cada ~3 horas. Cuando expiren, necesitarás re-exportarlas y volver a ejecutar `terraform apply` en `terraform/addons/` para refrescar el Secret de Kubernetes.
 
-#### Paso 2 (opcional): Ejecutar el chequeo previo
+#### Paso 2: Descubrir los nombres de los roles IAM
 
-```bash
-./preflight.sh
-```
-
-Este script realiza tres verificaciones:
-
-1. **Verifica la sesión de AWS**: Confirma que el caller identity es un rol `voclabs` y que la sesión no está cancelada (sin política `voc-cancel-cred`).
-2. **Localiza los roles EKS**: Busca en IAM los roles `LabEksClusterRole-*` y `LabEksNodeRole-*` que AWS Academy pre-crea en cada cuenta.
-3. **Compara con `terraform.tfvars`**: Verifica que los nombres de roles en el archivo coincidan con los que existen en la cuenta. Si no coinciden, imprime los valores correctos para copiar.
-
-Si `preflight.sh` falla con un error de sesión cancelada, puedes ir a Vocareum y haz clic en **Start Lab** nuevamente.
+Consulta la sección [6.1](#61-descubrir-los-nombres-de-los-roles-iam) más abajo para los one-liners que descubren los roles `LabEksClusterRole-*` y `LabEksNodeRole-*` en tu cuenta. **Nunca** copies estos valores de otro estudiante.
 
 #### Paso 3: Configurar las variables de Terraform
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars
+# Para cluster/ (necesita los nombres de los roles)
+cp terraform/cluster/terraform.tfvars.example terraform/cluster/terraform.tfvars
+$EDITOR terraform/cluster/terraform.tfvars
+
+# Para addons/ (no necesita roles IAM — solo region/cluster_name)
+cp terraform/addons/terraform.tfvars.example terraform/addons/terraform.tfvars
 ```
 
-Edita `terraform.tfvars` con los valores descubiertos por `preflight.sh`:
+Edita `terraform/cluster/terraform.tfvars` con los valores descubiertos en el paso 2:
 
 ```hcl
 region              = "us-east-1"
-cluster_name        = "tienda-eks"       # o "tienda-eks-1" según preferencia
+cluster_name        = "tienda-eks"
 cluster_version     = "1.30"
-cluster_role_name   = "cXXXXXXXXXXXXX-LabEksClusterRole-XXXXXXXXXXXX"
-node_role_name      = "cXXXXXXXXXXXXX-LabEksNodeRole-XXXXXXXXXXXX"
-
-# Las credenciales AWS pueden quedar como null si se exportan en el entorno:
-aws_access_key_id     = null
-aws_secret_access_key = null
-aws_session_token     = null
+cluster_role_name   = "cXXXXXXXXXXXXX-LabEksClusterRole-XXXXXXXXXXXX"   # de §6.1
+node_role_name      = "cXXXXXXXXXXXXX-LabEksNodeRole-XXXXXXXXXXXX"      # de §6.1
 ```
 
-> **Nota sobre `cluster_role_name` y `node_role_name`**: Estos valores son **específicos de cada cuenta** de AWS Academy. **Nunca** copies los valores del ejemplo o de otro estudiante — usa siempre los que aparezcan en tu consola de AWS o los descubiertos por `preflight.sh`.
+> **Nota sobre `cluster_role_name` y `node_role_name`**: Estos valores son **específicos de cada cuenta** de AWS Academy. **Nunca** copies los valores del ejemplo o de otro estudiante — usa siempre los que aparezcan en tu consola de AWS o los descubiertos en §6.1.
 
-#### Paso 4: Inicializar y aplicar Terraform
+#### Paso 4: Aplicar `terraform/cluster/`
 
 ```bash
+cd terraform/cluster
 terraform init
 terraform plan      # Revisar qué se va a crear
-terraform apply     # Aprovisionar (tarda ~20-30 minutos)
+terraform apply     # Aprovisiona VPC + SGs + EKS + ECR (~10-15 min)
 ```
 
-Durante el `apply` se crea, en orden:
+Durante el `apply` de `cluster/` se crea, en orden:
 
 1. VPC, subnets, gateways y tablas de ruteo (módulo `network`)
 2. Tags de Kubernetes en las subnets (ELB role tags)
@@ -313,10 +328,22 @@ Durante el `apply` se crea, en orden:
 5. Clúster EKS (~10-15 minutos)
 6. Node group (~5-10 minutos adicionales)
 7. EKS Add-ons (vpc-cni, cloudwatch-observability, metrics-server)
-8. Secret de Kubernetes con credenciales AWS
+
+#### Paso 5: Aplicar `terraform/addons/`
+
+```bash
+cd ../addons
+terraform init
+terraform plan      # Lee los outputs de cluster/ vía terraform_remote_state
+terraform apply     # Crea el Secret + Helm release del LBC (~2 min)
+```
+
+Durante el `apply` de `addons/` se crea:
+
+8. Secret de Kubernetes con credenciales AWS (en `kube-system`)
 9. Helm release del AWS Load Balancer Controller
 
-#### Paso 5: Conectar kubectl al clúster
+#### Paso 6: Conectar kubectl al clúster
 
 ```bash
 aws eks update-kubeconfig --region us-east-1 --name <nombre de tu cluster de EKS>
@@ -386,7 +413,7 @@ make clean
 make account=112769872808 clean
 ```
 
-> **Nota:** El ID de cuenta (`112769872808` en los ejemplos) es el de tu sesión de AWS Academy. Se muestra en la salida de `aws sts get-caller-identity` o en `preflight.sh`.
+> **Nota:** El ID de cuenta (`112769872808` en los ejemplos) es el de tu sesión de AWS Academy. Se muestra en la salida de `aws sts get-caller-identity`.
 
 ### 4.4. Desplegar la aplicación en EKS
 
@@ -434,17 +461,19 @@ Abre esa URL en un navegador. Deberías ver la página de **«Tienda de Alimento
 # 1. Eliminar los recursos de Kubernetes:
 kubectl delete -f app-k8s/k8s/
 
-# 2. Destruir la infraestructura de Terraform:
-cd tf-eks
+# 2. Destruir addons/ primero (para que el LBC limpie el NLB vía sus finalizers):
+cd terraform/addons
+terraform destroy
+
+# 3. Destruir cluster/:
+cd ../cluster
 terraform destroy
 ```
 
 `terraform destroy` hace lo siguiente en orden:
 
-1. Desinstala el Helm release del LBC (los finalizers eliminan el NLB y su security group)
-2. Elimina los repositorios ECR (y cualquier imagen que contengan)
-3. Elimina el clúster EKS y el node group (~10 minutos)
-4. Desmantela el VPC, subnets, gateways y tablas de ruteo
+1. **`addons/`**: desinstala el Helm release del LBC (los finalizers eliminan el NLB y su security group).
+2. **`cluster/`**: elimina los repositorios ECR (y cualquier imagen que contengan), el clúster EKS y el node group (~10 minutos), y desmonta el VPC, subnets, gateways y tablas de ruteo.
 
 > **Si `terraform destroy` falla** porque el NLB no se elimina, consulta la sección [9. Solución de problemas](#9-solución-de-problemas).
 
@@ -513,7 +542,7 @@ Si después del paso 1 el load balancer sigue ahí, bórralo manualmente:
 
 > **Si la VPC no se borra porque hay ENIs de un balanceador huérfano que no detectaste en el paso 2:** revisa el tag de esos ENIs (suelen tener `elbv2.k8s.aws/cluster: tienda-eks-1` en su descripción). Esos ENIs son la huella del load balancer y AWS los considera "recursos activos" hasta que los borres explícitamente.
 
-> **Si esto se repite en futuros teardowns:** revisa la sección 9 (Solución de problemas) o, en el `main.tf` raíz, agregá un `null_resource` con `provisioner "local-exec"` que en el bloque `destroy` borre los `Service` de tipo `LoadBalancer` antes de que Terraform intente eliminar las subnets. Eso automatiza el paso 1 de esta guía y deja el teardown funcionando con un solo comando.
+> **Si esto se repite en futuros teardowns:** revisa la sección 9 (Solución de problemas) o, en `terraform/cluster/main.tf`, agregá un `null_resource` con `provisioner "local-exec"` que en el bloque `destroy` borre los `Service` de tipo `LoadBalancer` antes de que Terraform intente eliminar las subnets. Eso automatiza el paso 1 de esta guía y deja el teardown funcionando con un solo comando.
 
 ---
 
@@ -529,14 +558,14 @@ AWS Academy utiliza roles STS temporales (`voclabs`) que expiran cada ~3 horas. 
 | `AWS_SECRET_ACCESS_KEY` | Panel AWS Details → Show | Clave secreta STS |
 | `AWS_SESSION_TOKEN` | Panel AWS Details → Show | Token de sesión STS (largo, comienza con `IQoJ...`) |
 
-Puedes exportarlas manualmente o editar y ejecutar `00-export_vars.sh`:
+Puedes exportarlas manualmente o editar y ejecutar `export_vars.sh`:
 
 ```bash
 # Editar con los valores actuales de tu sesión:
-vim tf-eks/00-export_vars.sh
+$EDITOR terraform/export_vars.sh
 
 # Exportar:
-source tf-eks/00-export_vars.sh
+source terraform/export_vars.sh
 ```
 
 > ⚠️ **Estas credenciales son temporales y se renuevan al reiniciar el lab. Nunca las compartas ni las commitées en un repositorio público.**
@@ -550,20 +579,11 @@ AWS Academy pre-crea dos roles IAM en cada cuenta de laboratorio. Sus nombres so
 | Cluster role | `c<hash>-LabEksClusterRole-<random>` | Rol de IAM para el plano de control de EKS. Confía en `eks.amazonaws.com`. Tiene las policies AWS-managed para el control plane (`AmazonEKSClusterPolicy`, etc.) |
 | Node role | `c<hash>-LabEksNodeRole-<random>` | Rol de IAM para los nodos worker. Confía en `ec2.amazonaws.com`. Tiene las policies AWS-managed para nodos (`AmazonEKS_CNI_Policy`, `AmazonEC2ContainerRegistryReadOnly`, `AmazonEKSWorkerNodePolicy`) |
 
-**No copies estos nombres de otro estudiante.** Usa siempre `preflight.sh` para descubrir los nombres correctos de tu cuenta:
-
-```bash
-./preflight.sh
-# Salida esperada:
-# [ok]  EKS cluster role(s) found:
-#     c209142a5311394l14806637t1w112769872-LabEksClusterRole-XXXXXXXXXXXX
-# [ok]  EKS node group role(s) found:
-#     c209142a5311394l14806637t1w112769872-LabEksNodeRole-XXXXXXXXXXXX
-```
+**No copies estos nombres de otro estudiante.** Descúbrelos en tu cuenta con los one-liners de la sección [6.1](#61-descubrir-los-nombres-de-los-roles-iam) más abajo, o visualmente con las instrucciones de la consola que siguen.
 
 #### 5.2.1. Cómo obtener los nombres de los roles desde la consola de AWS
 
-Si `preflight.sh` no está disponible o querés verificar visualmente los roles, podés buscarlos directamente en la consola. Hay dos caminos equivalentes: la **consola de EKS** (guiada, parte desde el servicio que los usa) y la **consola de IAM** (genérica, sirve para cualquier rol de la cuenta).
+Si preferís verificar visualmente los roles, podés buscarlos directamente en la consola. Hay dos caminos equivalentes: la **consola de EKS** (guiada, parte desde el servicio que los usa) y la **consola de IAM** (genérica, sirve para cualquier rol de la cuenta).
 
 **Camino A — Desde la consola de EKS (recomendado para el cluster role)**
 
@@ -602,7 +622,7 @@ El cluster role es el que confía en EKS; el node role es el que confía en EC2.
 **Una vez que tengas los dos nombres, pegalos en `terraform.tfvars`:**
 
 ```hcl
-# tf-eks/terraform.tfvars
+# terraform/cluster/terraform.tfvars
 cluster_role_name = "c<hash>-LabEksClusterRole-<random>"   # ← nombre de la consola
 node_role_name    = "c<hash>-LabEksNodeRole-<random>"      # ← nombre de la consola
 ```
@@ -613,76 +633,83 @@ node_role_name    = "c<hash>-LabEksNodeRole-<random>"      # ← nombre de la co
 
 ### 5.3. Variables de Terraform
 
-Las siguientes variables se configuran en `terraform.tfvars`:
+Tras la división en dos roots, las variables se reparten así:
 
-| Variable | Tipo | Default | Descripción |
-|----------|------|---------|-------------|
-| `region` | `string` | `us-east-1` | Región AWS donde se despliegan todos los recursos |
-| `vpc_cidr` | `string` | `10.0.0.0/20` | Bloque CIDR de la VPC (4096 direcciones) |
-| `azs` | `list(string)` | `["us-east-1a", "us-east-1b"]` | Zonas de disponibilidad para las subnets |
-| `public_subnet_newbits` | `number` | `4` | Bits adicionales para subdividir la VPC en subnets públicas |
-| `public_subnet_offset` | `number` | `0` | Offset para el cálculo de CIDR de subnets públicas |
-| `private_app_subnet_offset` | `number` | `2` | Offset para subnets de aplicación privadas |
-| `private_data_subnet_offset` | `number` | `4` | Offset para subnets de datos privadas |
-| `map_public_ip_on_launch` | `bool` | `true` | Asignar IPs públicas automáticamente en subnets públicas |
-| `enable_dns_support` | `bool` | `true` | Habilitar soporte DNS en la VPC |
-| `enable_dns_hostnames` | `bool` | `true` | Habilitar hostnames DNS en la VPC |
-| `cluster_name` | `string` | `tienda-eks` | Nombre del clúster EKS |
-| `cluster_version` | `string` | `1.30` | Versión de Kubernetes para el clúster |
-| `cluster_role_name` | `string` | — | **Nombre exacto** del rol IAM para el clúster (descubierto con `preflight.sh`) |
-| `node_role_name` | `string` | — | **Nombre exacto** del rol IAM para los nodos (descubierto con `preflight.sh`) |
-| `node_instance_type` | `string` | `t3.large` | Tipo de instancia EC2 para los nodos worker |
-| `node_desired_size` | `number` | `1` | Número deseado de nodos |
-| `node_min_size` | `number` | `1` | Número mínimo de nodos |
-| `node_max_size` | `number` | `3` | Número máximo de nodos |
-| `ecr_repo_names` | `list(string)` | `["tienda-frontend", "tienda-backend", "tienda-db"]` | Nombres de los repositorios ECR |
-| `lb_controller_chart_version` | `string` | `1.13.4` | Versión del chart de Helm del AWS LBC |
-| `aws_access_key_id` | `string` (sensitive) | `null` | Access key ID (si es `null`, se lee del entorno) |
-| `aws_secret_access_key` | `string` (sensitive) | `null` | Secret access key (si es `null`, se lee del entorno) |
-| `aws_session_token` | `string` (sensitive) | `null` | Session token (si es `null`, se lee del entorno) |
+- **Variables de `cluster/`** — se configuran en `terraform/cluster/terraform.tfvars`. Necesitan los nombres de los roles IAM.
+- **Variables de `addons/`** — se configuran en `terraform/addons/terraform.tfvars`. Sólo `region` y `cluster_name` necesitan coincidir con `cluster/`.
+
+| Variable | Tipo | Default | Root | Descripción |
+|----------|------|---------|------|-------------|
+| `region` | `string` | `us-east-1` | ambos | Región AWS donde se despliegan todos los recursos. Debe coincidir entre los dos roots. |
+| `vpc_cidr` | `string` | `10.0.0.0/20` | `cluster/` | Bloque CIDR de la VPC (4096 direcciones) |
+| `azs` | `list(string)` | `["us-east-1a", "us-east-1b"]` | `cluster/` | Zonas de disponibilidad para las subnets |
+| `public_subnet_newbits` | `number` | `4` | `cluster/` | Bits adicionales para subdividir la VPC en subnets públicas |
+| `public_subnet_offset` | `number` | `0` | `cluster/` | Offset para el cálculo de CIDR de subnets públicas |
+| `private_app_subnet_offset` | `number` | `2` | `cluster/` | Offset para subnets de aplicación privadas |
+| `private_data_subnet_offset` | `number` | `4` | `cluster/` | Offset para subnets de datos privadas |
+| `map_public_ip_on_launch` | `bool` | `true` | `cluster/` | Asignar IPs públicas automáticamente en subnets públicas |
+| `enable_dns_support` | `bool` | `true` | `cluster/` | Habilitar soporte DNS en la VPC |
+| `enable_dns_hostnames` | `bool` | `true` | `cluster/` | Habilitar hostnames DNS en la VPC |
+| `cluster_name` | `string` | `tienda-eks` | ambos | Nombre del clúster EKS. Debe coincidir entre los dos roots. |
+| `cluster_version` | `string` | `1.30` | `cluster/` | Versión de Kubernetes para el clúster |
+| `cluster_role_name` | `string` | — | `cluster/` | **Nombre exacto** del rol IAM para el clúster (descubierto con los one-liners de §6.1) |
+| `node_role_name` | `string` | — | `cluster/` | **Nombre exacto** del rol IAM para los nodos (descubierto con los one-liners de §6.1) |
+| `node_instance_type` | `string` | `t3.large` | `cluster/` | Tipo de instancia EC2 para los nodos worker |
+| `node_desired_size` | `number` | `1` | `cluster/` | Número deseado de nodos |
+| `node_min_size` | `number` | `1` | `cluster/` | Número mínimo de nodos |
+| `node_max_size` | `number` | `3` | `cluster/` | Número máximo de nodos |
+| `ecr_repo_names` | `list(string)` | `["tienda-frontend", "tienda-backend", "tienda-db"]` | `cluster/` | Nombres de los repositorios ECR |
+| `aws_access_key_id` | `string` (sensitive) | `null` | `addons/` | Access key ID del LBC (si es `null`, se lee del entorno) |
+| `aws_secret_access_key` | `string` (sensitive) | `null` | `addons/` | Secret access key del LBC (si es `null`, se lee del entorno) |
+| `aws_session_token` | `string` (sensitive) | `null` | `addons/` | Session token del LBC (si es `null`, se lee del entorno) |
 | `common_tags` | `map(string)` | `{}` | Tags aplicados a todos los recursos |
 
 **Notas importantes sobre las credenciales en Terraform:**
 
-- Si las variables `aws_access_key_id`, `aws_secret_access_key` y `aws_session_token` se dejan en `null` (valor por defecto), Terraform las lee automáticamente de las variables de entorno (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) usando el data source `external`.
-- El bloque `check "aws_credentials_present"` valida que las tres credenciales estén presentes antes de ejecutar cualquier plan o apply. Si falta alguna, Terraform falla con un mensaje de error indicando que se debe ejecutar `source 00-export_vars.sh`.
+- Si las variables `aws_access_key_id`, `aws_secret_access_key` y `aws_session_token` se dejan en `null` (valor por defecto) en `terraform/addons/terraform.tfvars`, Terraform las lee automáticamente de las variables de entorno (`AWS_ACCESS_KEY_ID`, AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) usando el data source `external` en `addons/main.tf`.
+- El bloque `check "aws_credentials_present"` en `addons/main.tf` (y su gemelo en `cluster/main.tf`) valida que las tres credenciales estén presentes antes de ejecutar cualquier plan o apply. Si falta alguna, Terraform falla con un mensaje de error indicando que se debe ejecutar `source terraform/export_vars.sh`.
 
 ---
 
 ## 6. Validación de componentes
 
-### 6.1. Chequeo previo con `preflight.sh`
+### 6.1. Descubrir los nombres de los roles IAM
 
-Ejecuta **siempre** este script antes de `terraform apply`:
+AWS Academy pre-crea dos roles IAM en cada cuenta (`LabEksClusterRole-*` y `LabEksNodeRole-*`). Sus nombres son **específicos de cada cuenta** — nunca los copies de otro estudiante. Descúbrelos con estos one-liners (necesitas `jq` o `--output text`):
 
 ```bash
-cd tf-eks
-source 00-export_vars.sh    # o exportar las variables manualmente
-./preflight.sh
+# Asegurate de tener las credenciales cargadas en este shell:
+source terraform/export_vars.sh
+aws sts get-caller-identity   # debe devolver assumed-role/voclabs/...
+
+# Cluster role:
+aws iam list-roles \
+  --query 'Roles[?starts_with(RoleName, `LabEksClusterRole-`)].RoleName' \
+  --output text
+# Salida esperada: un único nombre como
+#   c209142a5311394l14806637t1w112769872-LabEksClusterRole-XXXXXXXXXXXX
+
+# Node role:
+aws iam list-roles \
+  --query 'Roles[?starts_with(RoleName, `LabEksNodeRole-`)].RoleName' \
+  --output text
+# Salida esperada: un único nombre como
+#   c209142a5311394l14806637t1w112769872-LabEksNodeRole-XXXXXXXXXXXX
 ```
 
-`preflight.sh` realiza tres pasos:
+Si alguno de los dos comandos no devuelve nada, la sesión del laboratorio aún no provisionó los roles — iniciá el lab en Vocareum y esperá a que el indicador se ponga en verde.
 
-1. **Verifica la sesión de AWS Academy:**
-   - Confirma que el caller identity es un rol `voclabs`
-   - Detecta si la sesión está cancelada (política `voc-cancel-cred` adjunta)
-   - Sale con código 2 si la sesión está cancelada, indicando que se debe reiniciar el lab
+**Una vez que tengas los dos nombres, pegalos en `terraform/cluster/terraform.tfvars`:**
 
-2. **Localiza los roles EKS:**
-   - Busca en IAM los roles con prefijo `LabEksClusterRole-` y `LabEksNodeRole-`
-   - Sale con código 3 si no los encuentra (requiere acción del instructor)
+```hcl
+# terraform/cluster/terraform.tfvars
+cluster_role_name = "c<hash>-LabEksClusterRole-<random>"   # ← nombre de la salida
+node_role_name    = "c<hash>-LabEksNodeRole-<random>"      # ← nombre de la salida
+```
 
-3. **Compara con `terraform.tfvars`:**
-   - Verifica que los nombres de roles en el archivo coincidan con los de la cuenta
-   - Si no coinciden, imprime los valores correctos para copiar en `terraform.tfvars`
-   - Sale con código 4 si hay desajuste
+> ⚠️ **Pegá solo el nombre, no el ARN.** Terraform espera el nombre corto (`RoleName`); si le pasás el ARN completo, el data source `aws_iam_role` falla con `NoSuchEntity`.
 
-Códigos de salida:
-- `0`: Todo correcto
-- `1`: Falta `aws` o `jq`
-- `2`: Sesión cancelada
-- `3`: Roles IAM no encontrados
-- `4`: Valores en `terraform.tfvars` no coinciden
+> ℹ️ **Los nombres cambian entre cuentas de laboratorio.** Cada cuenta de AWS Academy tiene su propio `c<hash>` y sufijo aleatorio. Nunca copies estos valores desde otro estudiante ni desde un tutorial.
 
 ### 6.2. Validación del clúster EKS
 
@@ -960,8 +987,8 @@ La solución implementada en este repositorio es:
 - ✅ No requiere intervención del instructor para adjuntar políticas IAM.
 - ✅ Funciona con los permisos que AWS Academy otorga al rol `voclabs`.
 - ⚠️ Las credenciales STS **expiran cada ~3 horas**. Cuando expiran, es necesario:
-  1. Re-exportar las credenciales: `source 00-export_vars.sh`
-  2. Re-aplicar Terraform: `terraform apply` (para refrescar el Secret)
+  1. Re-exportar las credenciales: `source terraform/export_vars.sh`
+  2. Re-aplicar el root `addons/`: `cd terraform/addons && terraform apply` (refresca el Secret)
   3. Reiniciar el pod del LBC: `kubectl -n kube-system rollout restart deploy/aws-load-balancer-controller`
 
 ---
@@ -979,10 +1006,11 @@ La solución implementada en este repositorio es:
 3. Re-exporta las credenciales:
    ```bash
    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-   source 00-export_vars.sh
+   source terraform/export_vars.sh
    ```
-4. Re-aplica Terraform para refrescar el Secret:
+4. Re-aplica `addons/` para refrescar el Secret:
    ```bash
+   cd terraform/addons
    terraform apply
    ```
 5. Reinicia el pod del LBC:
@@ -1022,7 +1050,7 @@ Luego re-ejecuta `terraform destroy`.
 
 Estos roles son pre-creados por el instructor del laboratorio. Verifica en la consola de AWS → IAM → Roles que existan. Si no existen, contacta al instructor.
 
-Para más detalles, consulta `tf-eks/docs/TROUBLESHOOTING.es.md`.
+Para más detalles, consulta `terraform/docs/TROUBLESHOOTING.es.md`.
 
 ---
 
@@ -1042,11 +1070,11 @@ Para más detalles, consulta `tf-eks/docs/TROUBLESHOOTING.es.md`.
 
 7. **El archivo `terraform.tfstate` contiene información sensible**: Incluye el endpoint del clúster EKS, el ID de cuenta AWS y otros detalles de infraestructura. En un entorno real, este archivo debería almacenarse en un backend remoto cifrado (por ejemplo, S3 con cifrado del lado del servidor) y nunca committearse al repositorio.
 
-8. **El script `00-export_vars.sh` contiene credenciales reales**: En un entorno de producción, este archivo debería estar en `.gitignore` y nunca committearse. Para el laboratorio, asegúrate de no compartirlo fuera de tu equipo.
+8. **El script `export_vars.sh` contiene credenciales reales**: En un entorno de producción, este archivo debería estar en `.gitignore` y nunca committearse. Para el laboratorio, asegúrate de no compartirlo fuera de tu equipo.
 
 9. **Tiempo de creación del clúster**: EKS toma ~10-15 minutos en crear el clúster y ~5-10 minutos adicionales para el node group. El despliegue total toma aproximadamente 20 minutos.
 
-10. **El `.gitignore` de `tf-eks/` excluye archivos que ya están trackeados**: Los archivos `terraform.tfstate`, `terraform.tfvars`, `.terraform.lock.hcl` y el directorio `docs/` están en `.gitignore` pero fueron committeados antes de que se añadieran las exclusiones. En un entorno de producción, deberían eliminarse del tracking con `git rm --cached`.
+10. **Los `.gitignore` de `terraform/cluster/` y `terraform/addons/` excluyen archivos sensibles**: Los archivos `terraform.tfstate`, `terraform.tfvars`, `.terraform.lock.hcl` y `.terraform/` están en `.gitignore` para que no se commiteen. Asegúrate de que ningún `terraform.tfvars` con credenciales reales llegue al repositorio.
 
 ---
 
@@ -1084,21 +1112,29 @@ github-repo/
 │       ├── frontend-hpa.yaml          # HPA frontend 2-6 réplicas 60% CPU
 │       └── README.txt                 # Instrucciones de despliegue
 │
-└── tf-eks/                            # Infraestructura como código (Terraform)
-    ├── main.tf                        # Orquestación de módulos y recursos raíz
-    ├── variables.tf                   # Variables de entrada
-    ├── outputs.tf                     # Outputs del módulo raíz
-    ├── versions.tf                    # Providers (aws, kubernetes, helm, external)
-    ├── terraform.tfvars.example       # Plantilla de valores
-    ├── 00-export_vars.sh              # Script de exportación de credenciales AWS
-    ├── preflight.sh                   # Chequeo previo al apply
-    ├── .gitignore                     # Exclusiones de git
-    ├── modules/
-    │   ├── network/                   # VPC, subnets, IGW, NAT GW, route tables
+└── terraform/                          # Infraestructura como código (Terraform)
+    ├── cluster/                        # Root 1: AWS-only (VPC, SGs, EKS, ECR)
+    │   ├── main.tf
+    │   ├── variables.tf
+    │   ├── outputs.tf
+    │   ├── versions.tf                 # Solo providers aws (+ external)
+    │   ├── terraform.tfvars.example
+    │   └── .gitignore
+    ├── addons/                         # Root 2: kubernetes/helm (LBC, Secret)
+    │   ├── main.tf
+    │   ├── variables.tf
+    │   ├── outputs.tf
+    │   ├── versions.tf                 # providers aws + kubernetes + helm + external
+    │   ├── terraform.tfvars.example
+    │   └── .gitignore
+    ├── export_vars.sh                  # Script de exportación de credenciales AWS
+    ├── docs/                           # README, RUNBOOK, TROUBLESHOOTING (en/es)
+    ├── modules/                        # Módulos compartidos por ambos roots
+    │   ├── network/                    # VPC, subnets, IGW, NAT GW, route tables
     │   │   ├── main.tf
     │   │   ├── variables.tf
     │   │   └── outputs.tf
-    │   ├── security_groups/           # SG del clúster y de los nodos
+    │   ├── security_groups/            # SG del clúster y de los nodos
     │   │   ├── main.tf
     │   │   ├── variables.tf
     │   │   └── outputs.tf
