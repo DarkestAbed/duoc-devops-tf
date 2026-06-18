@@ -24,8 +24,14 @@ variable "node_role_name" {
 }
 
 variable "subnet_ids" {
-  description = "List of subnet IDs for the EKS cluster and node group"
+  description = "List of subnet IDs for the EKS cluster control plane"
   type        = list(string)
+}
+
+variable "node_subnet_ids" {
+  description = "Subnet IDs for the EKS node group. Defaults to subnet_ids when empty."
+  type        = list(string)
+  default     = []
 }
 
 variable "cluster_sg_ids" {

@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: 542768639545.dkr.ecr.us-east-1.amazonaws.com/tienda-frontend:eks-v1 # Colocar uri de tu imagen en ECR
+          image: 112769872808.dkr.ecr.us-east-1.amazonaws.com/tienda-frontend:eks-v1 # Colocar uri de tu imagen en ECR
           ports:
             - containerPort: 80
 

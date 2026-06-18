@@ -76,7 +76,7 @@ resource "aws_eks_node_group" "main" {
   cluster_name    = aws_eks_cluster.main.name
   node_group_name = "${var.cluster_name}-nodes"
   node_role_arn   = data.aws_iam_role.node_role.arn
-  subnet_ids      = var.subnet_ids
+  subnet_ids      = length(var.node_subnet_ids) > 0 ? var.node_subnet_ids : var.subnet_ids
 
   capacity_type  = "SPOT"
   instance_types = [var.node_instance_type]

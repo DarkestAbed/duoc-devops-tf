@@ -20,6 +20,76 @@ variable "azs" {
   default     = ["us-east-1a", "us-east-1b"]
 }
 
+# --- Network module knobs (mirror the network module defaults) ---
+
+variable "public_subnet_newbits" {
+  description = "Additional bits for subnet CIDRs within the VPC CIDR"
+  type        = number
+  default     = 4
+}
+
+variable "public_subnet_offset" {
+  description = "Offset for public subnet indices in cidrsubnet()"
+  type        = number
+  default     = 0
+}
+
+variable "private_app_subnet_offset" {
+  description = "Offset for private app subnet indices in cidrsubnet()"
+  type        = number
+  default     = 2
+}
+
+variable "private_data_subnet_offset" {
+  description = "Offset for private data subnet indices in cidrsubnet()"
+  type        = number
+  default     = 4
+}
+
+variable "map_public_ip_on_launch" {
+  description = "Auto-assign public IPs in public subnets"
+  type        = bool
+  default     = true
+}
+
+variable "enable_dns_support" {
+  description = "Enable DNS support in the VPC"
+  type        = bool
+  default     = true
+}
+
+variable "enable_dns_hostnames" {
+  description = "Enable DNS hostnames in the VPC"
+  type        = bool
+  default     = true
+}
+
+# --- AWS credentials for the AWS Load Balancer Controller ---
+# Leave at null to read them from the shell environment (export_vars.sh) via
+# the `external` data source in main.tf. Set explicitly in terraform.tfvars to
+# override.
+
+variable "aws_access_key_id" {
+  description = "AWS access key for the LBC pod. null = read from env (AWS_ACCESS_KEY_ID)."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "aws_secret_access_key" {
+  description = "AWS secret key for the LBC pod. null = read from env (AWS_SECRET_ACCESS_KEY)."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "aws_session_token" {
+  description = "AWS session token for the LBC pod. null = read from env (AWS_SESSION_TOKEN)."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type        = string
